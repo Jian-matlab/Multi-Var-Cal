@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<!--
+  Two constraints in 3D: linearly dependent gradients
+  ---------------------------------------------------
+  Problem:  minimise   f(x,y,z)  = x^2 + 4y^2 + 9z^2          (portfolio risk)
+            subject to g1(x,y,z) = x + y + z - 1       = 0     (fully invested)
+                       g2(x,y,z) = 3x + 7y + 11z - 6   = 0     (target return 6%)
+
+  A point on the constraint set is stationary for f exactly when
+  grad f, grad g1, grad g2 are linearly dependent, i.e. det[grad f, grad g1, grad g2] = 0.
+
+  Structure of this file:
+    1. CSS       - colour variables (light/dark) and layout
+    2. HTML      - slider, two <canvas> elements, readout cards
+    3. JavaScript
+         a) the mathematics (f, gradients, the constraint line)
+         b) a tiny hand-written 3D projection
+         c) draw(): redraws both canvases and the readouts
+         d) event handlers (slider, button, mouse/touch rotation)
+
+  No libraries and no network access are needed. Just open the file in a browser.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two constraints in 3D: linearly dependent gradients</title>
+<style>
+/* ---- Colours as CSS variables; the dark set replaces them automatically ---- */
+:root{
+  --bg:#ffffff;--surface-1:#f6f5f2;--text-primary:#1a1a19;--text-secondary:#55544f;--text-muted:#85847c;
+  --text-success:#0f7a3a;--border:#c3c2b7;--radius:8px;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#1f1f1e;--surface-1:#2a2a28;--text-primary:#ecebe6;--text-secondary:#b9b8b0;--text-muted:#85847c;
+        --text-success:#5fd08a;--border:#4a4a46;}
+}
+*{box-sizing:border-box}
+body{margin:0;padding:24px;background:var(--bg);color:var(--text-primary);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:900px;margin-inline:auto;line-height:1.45}
+h1{font-size:22px;font-weight:500;margin:0 0 6px}
+p.sub{margin:0 0 18px;color:var(--text-secondary);font-size:14px}
+button{background:transparent;color:var(--text-primary);border:0.5px solid var(--border);border-radius:var(--radius);
+  padding:6px 12px;font-size:14px;cursor:pointer}
+button:hover{background:var(--surface-1)}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)} /* screen-reader-only text */
+/* Two columns: 3D picture (wider) and graph of f along the line; one column on narrow screens */
+.grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:12px;align-items:start}
+@media (max-width:620px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<h1>Two constraints in 3D: when are ∇f, ∇g₁, ∇g₂ linearly dependent?</h1>
+<p class="sub">Minimise the portfolio risk f(x, y, z) = x² + 4y² + 9z² subject to g₁ = x + y + z − 1 = 0 (fully invested) and g₂ = 3x + 7y + 11z − 6 = 0 (target return 6%). The stationary points of f on the constraint set are exactly where the three gradients are linearly dependent.</p>
+
+<h2 class="sr-only">Three-dimensional illustration of a constrained stationary point with two constraints</h2>
+
+<!-- Controls: the slider position is the parameter s along the constraint line -->
+<div style="display:flex;align-items:center;gap:12px;margin:0 0 10px;flex-wrap:wrap;">
+  <label for="s" style="font-size:14px;color:var(--text-secondary);">Move along the constraint line</label>
+  <input type="range" id="s" step="0.0005" style="flex:1;min-width:160px;">
+  <button id="opt">Jump to stationary point</button>
+</div>
+
+<!-- Canvas A: the 3D scene.  Canvas B: the graph of f restricted to the line -->
+<div class="grid">
+  <canvas id="A" style="width:100%;height:420px;touch-action:none;cursor:grab;border-radius:var(--radius);background:var(--surface-1);"></canvas>
+  <canvas id="B" style="width:100%;height:420px;border-radius:var(--radius);background:var(--surface-1);"></canvas>
+</div>
+<p style="font-size:12px;color:var(--text-muted);margin:6px 0 8px;">Drag the left picture to rotate it. Axes: x = bonds, y = stocks, z = commodities (fractions of the portfolio).</p>
+
+<!-- Colour legend -->
+<div style="display:flex;flex-wrap:wrap;gap:16px;margin:0 0 12px;font-size:12px;color:var(--text-secondary);">
+  <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#2a78d6;"></span>level surface of f through the point</span>
+  <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#1baf7a;"></span>∇f</span>
+  <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#8a5cd6;"></span>∇g₁</span>
+  <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#eb6834;"></span>∇g₂</span>
+  <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:10px;background:rgba(235,104,52,0.25);border:1px solid #eb6834;"></span>plane spanned by ∇g₁, ∇g₂</span>
+</div>
+
+<!-- Readout cards, filled in by draw() -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;"><div style="font-size:13px;color:var(--text-secondary);">Weights (bonds / stocks / comm.)</div><div id="w" style="font-size:18px;font-weight:500;padding-top:4px;"></div></div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;"><div style="font-size:13px;color:var(--text-secondary);">Risk f = x² + 4y² + 9z²</div><div id="fv" style="font-size:24px;font-weight:500;"></div></div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;"><div style="font-size:13px;color:var(--text-secondary);">det[∇f, ∇g₁, ∇g₂]</div><div id="dv" style="font-size:24px;font-weight:500;"></div></div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;"><div style="font-size:13px;color:var(--text-secondary);">Status</div><div id="st" style="font-size:15px;font-weight:500;padding-top:4px;"></div></div>
+</div>
+
+<script>
+/* =====================================================================
+   (a) THE MATHEMATICS
+   ===================================================================== */
+
+// The constrained minimiser, found by solving the Lagrange system by hand:
+// (x*, y*, z*) = (49, 32, 23) / 104.
+const xs=49/104, ys=32/104, zs=23/104;
+
+// Direction of the constraint line: d = grad g1 x grad g2 = (1,1,1) x (3,7,11) = (4,-8,4),
+// which we scale to (1,-2,1).
+const D=[1,-2,1];
+
+// Range of the parameter s: the line leaves the allowed region (all weights >= 0)
+// when z reaches 0 (s = -z*) or when y reaches 0 (s = y*/2).
+const smin=-zs, smax=ys/2;
+
+// Point on the constraint line with parameter s.  s = 0 is the stationary point.
+const P=s=>[xs+s*D[0], ys+s*D[1], zs+s*D[2]];
+
+// The objective f and its gradient.
+const F=p=>p[0]*p[0]+4*p[1]*p[1]+9*p[2]*p[2];
+const grad=p=>[2*p[0],8*p[1],18*p[2]];
+
+// h(s) = f restricted to the line, and its derivative h'(s) = grad f . d (chain rule).
+const h =s=>F(P(s));
+const dh=s=>{const g=grad(P(s));return g[0]*D[0]+g[1]*D[1]+g[2]*D[2];};
+
+// det[grad f, grad g1, grad g2] = grad f . (grad g1 x grad g2) = grad f . (4,-8,4).
+// This is 4*h'(s): the determinant vanishes exactly when the restricted function is stationary.
+const det=p=>{const g=grad(p);return g[0]*4+g[1]*(-8)+g[2]*4;};
+
+/* =====================================================================
+   Setup: slider range, camera angles, small vector helpers
+   ===================================================================== */
+const sl=document.getElementById('s');
+sl.min=smin; sl.max=smax; sl.value=-0.19;      // start away from the optimum
+
+let az=-0.8, el=0.5, drag=null;                // camera: rotation about vertical axis, and tilt
+const C0=[0.4,0.35,0.3];                       // point the camera looks at (centre of the scene)
+const cv=document.getElementById('A'), cb=document.getElementById('B');
+
+const norm=v=>{const n=Math.hypot(...v);return v.map(a=>a/n);};                    // unit vector
+const add =(a,b,k=1)=>[a[0]+k*b[0],a[1]+k*b[1],a[2]+k*b[2]];                       // a + k*b
+
+// Make a canvas sharp on high-resolution screens; returns [context, cssWidth, cssHeight].
+function setup(c){
+  const d=window.devicePixelRatio||1, w=c.clientWidth, H=c.clientHeight;
+  c.width=w*d; c.height=H*d;
+  const x=c.getContext('2d'); x.setTransform(d,0,0,d,0,0);
+  return [x,w,H];
+}
+
+/* =====================================================================
+   (c) DRAWING.  One function redraws everything.
+   ===================================================================== */
+function draw(){
+  // Colours for the canvases (canvas cannot read CSS variables directly)
+  const dark=matchMedia('(prefers-color-scheme: dark)').matches;
+  const T =dark?'#ecebe6':'#1a1a19', T2=dark?'#b9b8b0':'#55544f', MU=dark?'#85847c':'#98968c';
+  const GR=dark?'rgba(255,255,255,0.08)':'rgba(0,0,0,0.06)';
+
+  const s=+sl.value, p=P(s), f=F(p), g=grad(p);   // current point, risk, gradient
+
+  // ---------------------- left canvas: the 3D scene ----------------------
+  let [x,w,H]=setup(cv);
+  const k=Math.min(w,H)*0.5, cx=w/2, cy=H/2+8;    // scale and screen centre
+
+  // (b) Hand-written 3D projection:
+  //   1. shift the point so the scene centre is at the origin
+  //   2. rotate about the vertical (z) axis by az
+  //   3. tilt by el; the resulting two numbers are screen x and screen y
+  const rot=q=>{
+    const a=q[0]-C0[0], b=q[1]-C0[1], c=q[2]-C0[2];
+    const x1=a*Math.cos(az)-b*Math.sin(az), y1=a*Math.sin(az)+b*Math.cos(az);
+    return [x1, y1*Math.sin(el)+c*Math.cos(el)];
+  };
+  const pr=q=>{const r=rot(q);return [cx+k*r[0], cy-k*r[1]];};   // 3D point -> pixel position
+
+  // Small drawing helpers working directly with 3D points
+  const line=(a,b,col,wd,dash)=>{const A=pr(a),B=pr(b);x.beginPath();x.moveTo(A[0],A[1]);x.lineTo(B[0],B[1]);
+    x.strokeStyle=col;x.lineWidth=wd;x.setLineDash(dash||[]);x.stroke();x.setLineDash([]);};
+  const poly=(pts,col,wd,fill)=>{x.beginPath();
+    pts.forEach((q,i)=>{const A=pr(q);i?x.lineTo(A[0],A[1]):x.moveTo(A[0],A[1]);});
+    if(fill){x.closePath();x.fillStyle=fill;x.fill();}
+    x.strokeStyle=col;x.lineWidth=wd;if(wd>0)x.stroke();};
+  const txt=(t,q,col,sz,dx=0,dy=0)=>{const A=pr(q);x.fillStyle=col;x.font=sz+'px system-ui,sans-serif';x.fillText(t,A[0]+dx,A[1]+dy);};
+
+  // The plane g1 = 0 restricted to the positive octant is a triangle
+  poly([[1,0,0],[0,1,0],[0,0,1]],MU,1,GR);
+
+  // Coordinate axes with labels
+  [[[1.2,0,0],'x'],[[0,1.2,0],'y'],[[0,0,1.2],'z']].forEach(([e,l])=>{line([0,0,0],e,MU,1);txt(l,e,T2,13,4,4);});
+
+  // Level surface f = c through the current point: an ellipsoid with semi-axes
+  // sqrt(c), sqrt(c)/2, sqrt(c)/3.  Drawn as meridians and parallels (positive octant only).
+  const a=Math.sqrt(f), b=a/2, cc=a/3, E='rgba(42,120,214,0.55)';
+  for(let i=0;i<=6;i++){                         // meridians: fixed angle phi, sweep theta
+    const ph=i/6*Math.PI/2, pts=[];
+    for(let j=0;j<=40;j++){const th=j/40*Math.PI/2;
+      pts.push([a*Math.sin(th)*Math.cos(ph), b*Math.sin(th)*Math.sin(ph), cc*Math.cos(th)]);}
+    poly(pts,E,1.2);
+  }
+  for(let i=1;i<=6;i++){                         // parallels: fixed angle theta, sweep phi
+    const th=i/6*Math.PI/2, pts=[];
+    for(let j=0;j<=40;j++){const ph=j/40*Math.PI/2;
+      pts.push([a*Math.sin(th)*Math.cos(ph), b*Math.sin(th)*Math.sin(ph), cc*Math.cos(th)]);}
+    poly(pts,E,1.2);
+  }
+
+  // The plane spanned by grad g1 and grad g2, drawn as a square centred at p.
+  // u and v are two perpendicular unit vectors in that plane (Gram-Schmidt).
+  const u=norm([1,1,1]);
+  let v=add([3,7,11],u,-(3+7+11)/3);  v=norm(v);   // remove the u-component of grad g2
+  const L=0.3;
+  poly([add(add(p,u,L),v,L), add(add(p,u,-L),v,L), add(add(p,u,-L),v,-L), add(add(p,u,L),v,-L)],
+       '#eb6834',1,'rgba(235,104,52,0.2)');
+
+  // The constraint set: the part of the line g1 = g2 = 0 with all weights >= 0
+  line(P(smin),P(smax),T,3.5);
+
+  // Gradient arrows at p.  Each is normalised to the same length: this keeps the picture
+  // readable and does not change whether the three vectors lie in one plane.
+  const arrow=(dir,col,lab)=>{
+    const d=norm(dir), e=add(p,d,0.34), A=pr(p), B=pr(e);
+    x.beginPath();x.moveTo(A[0],A[1]);x.lineTo(B[0],B[1]);x.strokeStyle=col;x.lineWidth=3;x.stroke();
+    const ang=Math.atan2(B[1]-A[1],B[0]-A[0]);   // arrowhead as a small triangle
+    x.beginPath();x.moveTo(B[0],B[1]);
+    x.lineTo(B[0]-11*Math.cos(ang-0.4),B[1]-11*Math.sin(ang-0.4));
+    x.lineTo(B[0]-11*Math.cos(ang+0.4),B[1]-11*Math.sin(ang+0.4));
+    x.closePath();x.fillStyle=col;x.fill();
+    x.font='14px system-ui,sans-serif';x.fillText(lab,B[0]+6*Math.cos(ang)+3,B[1]+6*Math.sin(ang)-3);
+  };
+  arrow([1,1,1],'#8a5cd6','∇g₁');
+  arrow([3,7,11],'#eb6834','∇g₂');
+  arrow(g,'#1baf7a','∇f');
+
+  // The current point
+  const Pp=pr(p);
+  x.beginPath();x.arc(Pp[0],Pp[1],6,0,7);x.fillStyle=T;x.fill();
+  x.strokeStyle=dark?'#1f1f1e':'#fff';x.lineWidth=2;x.stroke();
+  x.fillStyle=T2;x.font='12px system-ui,sans-serif';x.fillText('feasible portfolios (g₁ = g₂ = 0)',12,H-12);
+
+  // ---------------------- right canvas: h(s) = f along the line ----------------------
+  [x,w,H]=setup(cb);
+  const l=46, r=14, t=34, bm=H-44, hm=Math.max(h(smin),h(smax))*1.05;   // plot margins and y-range
+  const RX=q=>l+(q-smin)/(smax-smin)*(w-l-r);     // parameter s -> pixel x
+  const RY=v=>bm-v/hm*(bm-t);                     // value of h  -> pixel y
+
+  // Axes and labels
+  x.strokeStyle=MU;x.lineWidth=1;x.beginPath();x.moveTo(l,t);x.lineTo(l,bm);x.lineTo(w-r,bm);x.stroke();
+  x.fillStyle=T2;x.font='12px system-ui,sans-serif';x.fillText('f along the line',8,20);
+  x.fillStyle=MU;x.font='11px system-ui,sans-serif';
+  x.fillText('0',l-12,bm+4); x.fillText(hm.toFixed(1).slice(0,3),l-26,t+4);
+  x.fillText('no comm.',l-6,bm+16);
+  x.textAlign='right';x.fillText('no stocks',w-r+4,bm+16);x.textAlign='left';
+  x.fillText('position on line',w/2-36,bm+32);
+
+  // The curve h(s)
+  x.beginPath();
+  for(let i=0;i<=80;i++){const q=smin+i/80*(smax-smin);i?x.lineTo(RX(q),RY(h(q))):x.moveTo(RX(q),RY(h(q)));}
+  x.strokeStyle=T;x.lineWidth=2.5;x.stroke();
+
+  // Vertical guide at the current s
+  x.setLineDash([3,3]);x.strokeStyle=MU;x.beginPath();x.moveTo(RX(s),t);x.lineTo(RX(s),bm);x.stroke();x.setLineDash([]);
+
+  // Tangent line to h at s, with slope h'(s) converted from data units to pixels.
+  // It is horizontal exactly at the stationary point.
+  const kk=(bm-t)/hm/((w-l-r)/(smax-smin)), sy=-dh(s)*kk*30;
+  x.beginPath();x.moveTo(RX(s)-30,RY(h(s))-sy);x.lineTo(RX(s)+30,RY(h(s))+sy);
+  x.strokeStyle='#eb6834';x.lineWidth=2.5;x.stroke();
+
+  // Current point (filled) and the stationary point (hollow circle)
+  x.beginPath();x.arc(RX(s),RY(h(s)),6,0,7);x.fillStyle='#2a78d6';x.fill();
+  x.beginPath();x.arc(RX(0),RY(h(0)),3.5,0,7);x.strokeStyle=T2;x.lineWidth=1;x.stroke();
+
+  // ---------------------- readout cards ----------------------
+  document.getElementById('w').textContent =
+    Math.round(p[0]*100)+'% / '+Math.round(p[1]*100)+'% / '+Math.round(p[2]*100)+'%';
+  document.getElementById('fv').textContent=f.toFixed(3);
+  document.getElementById('dv').textContent=det(p).toFixed(2);
+  const st=document.getElementById('st'), on=Math.abs(s)<0.004;   // |s| small  <=>  det close to 0
+  st.textContent=on?'Linearly dependent: ∇f lies in the plane. Stationary.':'∇f sticks out of the plane';
+  st.style.color=on?'var(--text-success)':'var(--text-secondary)';
+}
+
+/* =====================================================================
+   (d) EVENTS
+   ===================================================================== */
+sl.addEventListener('input',draw);                                      // slider moves the point
+document.getElementById('opt').addEventListener('click',()=>{sl.value=0;draw();});   // jump to s = 0
+
+// Rotate the scene by dragging on the 3D canvas (mouse or touch)
+cv.addEventListener('pointerdown',e=>{drag=[e.clientX,e.clientY];cv.setPointerCapture(e.pointerId);cv.style.cursor='grabbing';});
+cv.addEventListener('pointermove',e=>{
+  if(!drag)return;
+  az+=(e.clientX-drag[0])*0.008;                                         // horizontal drag: spin
+  el=Math.max(-0.3,Math.min(1.4,el+(e.clientY-drag[1])*0.008));          // vertical drag: tilt (clamped)
+  drag=[e.clientX,e.clientY];
+  draw();
+});
+const end=()=>{drag=null;cv.style.cursor='grab';};
+cv.addEventListener('pointerup',end);
+cv.addEventListener('pointercancel',end);
+
+addEventListener('resize',draw);                                        // redraw when the window changes
+draw();                                                                 // first drawing
+</script>
+</body>
+</html>
