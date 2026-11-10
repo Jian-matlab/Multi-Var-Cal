@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<!--
+  Elliptic coordinates (u, v) with two sliders
+  --------------------------------------------
+  Map:   x(u,v) = sqrt( (u-1)(1-v) / 2 ),    y(u,v) = sqrt( (u+1)(v+1) / 2 )
+  Domain: 1 <= u,  -1 <= v <= 1  (here u is limited to 1..6 for plotting).
+
+  Coordinate lines (eliminate v, resp. u):
+    u = const : x^2/(u-1) + y^2/(u+1) = 1      confocal ellipses
+    v = const : y^2/(1+v) - x^2/(1-v) = 1      confocal hyperbolas
+  Both families have the foci (0, +-sqrt 2).
+
+  Relation to the usual elliptic coordinates: with u = cosh(mu), v = cos(nu),
+    x = sqrt2 * sinh(mu/2) sin(nu/2),   y = sqrt2 * cosh(mu/2) cos(nu/2).
+
+  Tangent vectors (from differentiating x^2 and y^2):
+    r_u = ( (1-v)/(4x),      (1+v)/(4y) )
+    r_v = ( -(u-1)/(4x),     (u+1)/(4y) )
+    r_u . r_v = 0   -> the coordinate system is orthogonal.
+
+  File structure:  CSS | HTML (sliders and two canvases) | JavaScript (data, draw(), events)
+  No libraries or network access are needed. Open the file in any browser.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Elliptic coordinates (u, v)</title>
+<style>
+/* ---- Colours as CSS variables; the dark set replaces them automatically ---- */
+:root{
+  --bg:#ffffff;--surface-1:#f6f5f2;--text-primary:#1a1a19;--text-secondary:#55544f;--text-muted:#85847c;
+  --border:#c3c2b7;--radius:8px;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#1f1f1e;--surface-1:#2a2a28;--text-primary:#ecebe6;--text-secondary:#b9b8b0;--text-muted:#85847c;--border:#4a4a46;}
+}
+*{box-sizing:border-box}
+body{margin:0;padding:24px;background:var(--bg);color:var(--text-primary);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:900px;margin-inline:auto;line-height:1.45}
+h1{font-size:22px;font-weight:500;margin:0 0 6px}
+p.sub{margin:0 0 18px;color:var(--text-secondary);font-size:14px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+/* Two panels side by side; stacked on narrow screens */
+.panels{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);gap:12px;align-items:start}
+@media (max-width:620px){.panels{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<h1>Elliptic coordinates (u, v)</h1>
+<p class="sub">x = √((u−1)(1−v)/2), y = √((u+1)(v+1)/2). Curves u = const are confocal ellipses, curves v = const are confocal hyperbolas, and they cross at right angles. Move the sliders to move the point.</p>
+
+<h2 class="sr-only">Elliptic coordinate system: the (u,v) rectangle is mapped to the (x,y) plane</h2>
+
+<!-- Sliders: the slider values are u and v themselves -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px 24px;margin:0 0 10px;">
+  <div>
+    <label for="su" style="font-size:14px;color:var(--text-secondary);">u = <span id="uv" style="font-weight:500;color:#2a78d6;"></span> <span style="color:var(--text-muted);">(1 ≤ u ≤ 6)</span></label>
+    <input type="range" id="su" min="1" max="6" step="0.01" value="2.5" style="width:100%;">
+  </div>
+  <div>
+    <label for="sv" style="font-size:14px;color:var(--text-secondary);">v = <span id="vv" style="font-weight:500;color:#eb6834;"></span> <span style="color:var(--text-muted);">(−1 ≤ v ≤ 1)</span></label>
+    <input type="range" id="sv" min="-1" max="1" step="0.01" value="0.3" style="width:100%;">
+  </div>
+</div>
+<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);margin:0 0 10px;">
+  <input type="checkbox" id="ar" checked> show tangent vectors ∂r/∂u and ∂r/∂v at the point
+</label>
+
+<!-- Canvas CU: the (u,v) rectangle.  Canvas CX: the (x,y) plane -->
+<div class="panels">
+  <canvas id="CU" style="width:100%;aspect-ratio:1/1;border-radius:var(--radius);background:var(--surface-1);"></canvas>
+  <canvas id="CX" style="width:100%;aspect-ratio:1/1;border-radius:var(--radius);background:var(--surface-1);"></canvas>
+</div>
+<p style="font-size:12px;color:var(--text-muted);margin:6px 0 10px;">The formulas give x, y ≥ 0 (first quadrant, strong lines); the faint copies are the mirror images in the other quadrants. Each arrow is tangent to the coordinate line it lies along: ∂r/∂u runs along the v = const hyperbola, ∂r/∂v along the u = const ellipse.</p>
+
+<!-- Readout cards, filled in by draw() -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;">
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;"><div style="font-size:13px;color:var(--text-secondary);">Point (x, y)</div><div id="pt" style="font-size:20px;font-weight:500;padding-top:2px;"></div></div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;"><div style="font-size:13px;color:#2a78d6;">u = const: ellipse</div><div id="el" style="font-size:14px;font-weight:500;padding-top:6px;"></div></div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;"><div style="font-size:13px;color:#eb6834;">v = const: hyperbola</div><div id="hy" style="font-size:14px;font-weight:500;padding-top:6px;"></div></div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;"><div style="font-size:13px;color:var(--text-secondary);">Angle between ∂r/∂u and ∂r/∂v</div><div id="an" style="font-size:20px;font-weight:500;padding-top:2px;"></div></div>
+</div>
+
+<script>
+/* =====================================================================
+   DATA AND THE COORDINATE MAP
+   ===================================================================== */
+const BL='#2a78d6', OR='#eb6834';                 // blue: u-lines, orange: v-lines
+const UMAX=6, MUMAX=Math.acosh(UMAX);             // largest u shown, and the matching mu (u = cosh mu)
+
+// Which coordinate lines to draw as the background grid
+const ULEV=[1,1.25,1.5,2,2.5,3,4,5,6];
+const VLEV=[-1,-.75,-.5,-.25,0,.25,.5,.75,1];
+
+// The map (u,v) -> (x,y), positive square roots (first quadrant).
+// Math.max(0, .) protects against tiny negative round-off at the boundary of the domain.
+const pos=(u,v)=>[Math.sqrt(Math.max(0,(u-1)*(1-v)/2)), Math.sqrt(Math.max(0,(u+1)*(v+1)/2))];
+
+const su=document.getElementById('su'), sv=document.getElementById('sv'), ar=document.getElementById('ar');
+const cu=document.getElementById('CU'), cx=document.getElementById('CX');
+
+// Make a canvas sharp on high-resolution screens; returns [context, cssWidth, cssHeight].
+function setup(c){
+  const d=window.devicePixelRatio||1, w=c.clientWidth, H=c.clientHeight;
+  c.width=w*d; c.height=H*d;
+  const x=c.getContext('2d'); x.setTransform(d,0,0,d,0,0);
+  return [x,w,H];
+}
+
+/* =====================================================================
+   DRAWING: one function redraws both panels and the readouts
+   ===================================================================== */
+function draw(){
+  // Colours for the canvases (a canvas cannot read CSS variables directly)
+  const dark=matchMedia('(prefers-color-scheme: dark)').matches;
+  const T=dark?'#ecebe6':'#1a1a19', T2=dark?'#b9b8b0':'#55544f', MU=dark?'#85847c':'#98968c';
+
+  const u0=+su.value, v0=+sv.value, P=pos(u0,v0);   // current (u,v) and its image (x,y)
+  document.getElementById('uv').textContent=u0.toFixed(2);
+  document.getElementById('vv').textContent=v0.toFixed(2);
+
+  // ---------------------- right panel: the (x,y) plane ----------------------
+  let [c,w,H]=setup(cx);
+  // Plot window is -3..3 in both x and y; k is pixels per unit
+  const pad=22, k=(Math.min(w,H)-2*pad)/6, ox=w/2, oy=H/2;
+  const px=x=>ox+k*x, py=y=>oy-k*y;                 // model -> pixel
+
+  // Draw a polyline through model points
+  const path=(pts,col,wd,al)=>{
+    c.globalAlpha=al; c.beginPath();
+    pts.forEach((q,i)=>i?c.lineTo(px(q[0]),py(q[1])):c.moveTo(px(q[0]),py(q[1])));
+    c.strokeStyle=col; c.lineWidth=wd; c.stroke(); c.globalAlpha=1;
+  };
+  // The curve u = const.  We sweep v = cos(nu), nu in [0, pi], which gives evenly spaced
+  // points on the ellipse (sweeping v directly would bunch the points near the axes).
+  // sx, sy = +-1 mirror the first-quadrant curve into the other quadrants.
+  const uCurve=(u,sx,sy)=>{const a=[];
+    for(let i=0;i<=120;i++){const q=pos(u,Math.cos(i/120*Math.PI));a.push([sx*q[0],sy*q[1]]);}
+    return a;};
+  // The curve v = const.  We sweep u = cosh(mu), which keeps the points smooth near u = 1.
+  const vCurve=(v,sx,sy)=>{const a=[];
+    for(let i=0;i<=120;i++){const q=pos(Math.cosh(i/120*MUMAX),v);a.push([sx*q[0],sy*q[1]]);}
+    return a;};
+
+  // [sx, sy, opacity]: the first quadrant is the real image of the map, the rest are mirrors
+  const Q=[[1,1,1],[-1,1,.35],[1,-1,.35],[-1,-1,.35]];
+
+  // Axes
+  c.strokeStyle=MU; c.lineWidth=1; c.beginPath();
+  c.moveTo(px(-3),py(0)); c.lineTo(px(3),py(0)); c.moveTo(px(0),py(-3)); c.lineTo(px(0),py(3)); c.stroke();
+  c.fillStyle=T2; c.font='12px system-ui,sans-serif';
+  c.fillText('x',px(3)-10,py(0)-6); c.fillText('y',px(0)+6,py(3)+12);
+
+  // Background grid of coordinate lines
+  Q.forEach(([sx,sy,al])=>{
+    ULEV.forEach(u=>path(uCurve(u,sx,sy),MU,1,al*0.6));
+    VLEV.forEach(v=>path(vCurve(v,sx,sy),MU,1,al*0.6));
+  });
+  // Highlighted lines through the current point: blue ellipse, orange hyperbola
+  Q.forEach(([sx,sy,al])=>{path(uCurve(u0,sx,sy),BL,2.8,al); path(vCurve(v0,sx,sy),OR,2.8,al);});
+
+  // The common foci (0, +-sqrt 2)
+  const F=Math.SQRT2;
+  [F,-F].forEach(f=>{c.beginPath();c.arc(px(0),py(f),3.5,0,7);c.fillStyle=T2;c.fill();});
+  c.fillStyle=T2; c.font='11px system-ui,sans-serif';
+  c.fillText('focus (0, √2)',px(0)+8,py(F)+4); c.fillText('focus (0, −√2)',px(0)+8,py(-F)+4);
+
+  // Tangent vectors.  r_u and r_v come from differentiating x^2 and y^2 with respect to u, v
+  // (e.g. 2x x_u = (1-v)/2).  They are undefined on the axes, where x = 0 or y = 0.
+  const sing=P[0]<0.02||P[1]<0.02;
+  let ang=null;
+  if(!sing){
+    const ru=[(1-v0)/(4*P[0]),(v0+1)/(4*P[1])];
+    const rv=[-(u0-1)/(4*P[0]),(u0+1)/(4*P[1])];
+    const nu=Math.hypot(...ru), nv=Math.hypot(...rv);
+    // Angle from the dot product; the result is 90 degrees for every (u,v)
+    ang=Math.acos((ru[0]*rv[0]+ru[1]*rv[1])/(nu*nv))*180/Math.PI;
+    if(ar.checked){
+      // Arrows are normalised to the same length, so only the direction is shown
+      const arrow=(d,col,lab)=>{
+        const L=0.6, x0=px(P[0]), y0=py(P[1]), x1=x0+k*L*d[0], y1=y0-k*L*d[1];
+        c.beginPath();c.moveTo(x0,y0);c.lineTo(x1,y1);c.strokeStyle=col;c.lineWidth=2.5;c.stroke();
+        const a=Math.atan2(y1-y0,x1-x0);                       // arrowhead as a small triangle
+        c.beginPath();c.moveTo(x1,y1);
+        c.lineTo(x1-10*Math.cos(a-0.4),y1-10*Math.sin(a-0.4));
+        c.lineTo(x1-10*Math.cos(a+0.4),y1-10*Math.sin(a+0.4));
+        c.closePath();c.fillStyle=col;c.fill();
+        c.font='13px system-ui,sans-serif';c.fillText(lab,x1+6*Math.cos(a)+4,y1+6*Math.sin(a)-2);
+      };
+      arrow([ru[0]/nu,ru[1]/nu],OR,'∂r/∂u');   // r_u points along the v = const hyperbola
+      arrow([rv[0]/nv,rv[1]/nv],BL,'∂r/∂v');   // r_v points along the u = const ellipse
+    }
+  }
+  // The point itself
+  c.beginPath();c.arc(px(P[0]),py(P[1]),6,0,7);c.fillStyle=T;c.fill();
+  c.strokeStyle=dark?'#1f1f1e':'#fff';c.lineWidth=2;c.stroke();
+  c.fillStyle=T2;c.font='12px system-ui,sans-serif';c.fillText('(x, y) plane',10,18);
+
+  // ---------------------- left panel: the (u,v) rectangle ----------------------
+  [c,w,H]=setup(cu);
+  const l=34, r=12, t=26, bm=H-32;                       // plot margins
+  const UX=u=>l+(u-1)/(UMAX-1)*(w-l-r);                  // u in [1, UMAX]  -> pixel x
+  const VY=v=>bm-(v+1)/2*(bm-t);                         // v in [-1, 1]    -> pixel y
+  c.fillStyle=T2; c.font='12px system-ui,sans-serif'; c.fillText('(u, v) plane',10,18);
+
+  // Grid: the same levels as in the (x,y) plane (vertical lines u = const, horizontal v = const)
+  c.strokeStyle=MU; c.lineWidth=1; c.globalAlpha=0.6;
+  ULEV.forEach(u=>{c.beginPath();c.moveTo(UX(u),VY(-1));c.lineTo(UX(u),VY(1));c.stroke();});
+  VLEV.forEach(v=>{c.beginPath();c.moveTo(UX(1),VY(v));c.lineTo(UX(UMAX),VY(v));c.stroke();});
+  c.globalAlpha=1;
+  // Highlighted lines and the point, in the same colours as in the (x,y) plane
+  c.strokeStyle=BL; c.lineWidth=2.8; c.beginPath(); c.moveTo(UX(u0),VY(-1)); c.lineTo(UX(u0),VY(1)); c.stroke();
+  c.strokeStyle=OR; c.beginPath(); c.moveTo(UX(1),VY(v0)); c.lineTo(UX(UMAX),VY(v0)); c.stroke();
+  c.beginPath();c.arc(UX(u0),VY(v0),6,0,7);c.fillStyle=T;c.fill();
+  c.strokeStyle=dark?'#1f1f1e':'#fff';c.lineWidth=2;c.stroke();
+  // Tick labels and axis names
+  c.fillStyle=MU; c.font='11px system-ui,sans-serif'; c.textAlign='center';
+  [1,2,3,4,5,6].forEach(u=>c.fillText(u,UX(u),bm+14)); c.fillText('u',(l+w-r)/2,bm+27);
+  c.textAlign='right'; [-1,0,1].forEach(v=>c.fillText(v,l-6,VY(v)+4));
+  c.textAlign='left'; c.fillText('v',6,(t+bm)/2);
+
+  // ---------------------- readout cards ----------------------
+  document.getElementById('pt').textContent='('+P[0].toFixed(3)+', '+P[1].toFixed(3)+')';
+  document.getElementById('el').textContent = u0-1<0.005
+    ? 'degenerate: the segment x = 0, 0 ≤ y ≤ √2'
+    : 'x²/'+(u0-1).toFixed(2)+' + y²/'+(u0+1).toFixed(2)+' = 1';
+  document.getElementById('hy').textContent = (1-v0<0.005) ? 'degenerate: the y-axis, y ≥ √2'
+    : (v0+1<0.005) ? 'degenerate: the x-axis'
+    : 'y²/'+(v0+1).toFixed(2)+' − x²/'+(1-v0).toFixed(2)+' = 1';
+  document.getElementById('an').textContent = ang===null ? '— (on an axis)' : ang.toFixed(1)+'°';
+}
+
+/* =====================================================================
+   EVENTS: any slider move, checkbox change or window resize redraws everything
+   ===================================================================== */
+su.addEventListener('input',draw);
+sv.addEventListener('input',draw);
+ar.addEventListener('change',draw);
+addEventListener('resize',draw);
+draw();   // first drawing
+</script>
+</body>
+</html>
